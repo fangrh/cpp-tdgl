@@ -1,0 +1,5 @@
+test_operators 0 0
+test_mesh 1 0.00895323
+test_timing 1 0.5079
+---
+test_operators
