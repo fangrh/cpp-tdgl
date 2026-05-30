@@ -2,6 +2,7 @@
 #include "mesh/io.h"
 #include "solver/solver.h"
 #include "solution/solution.h"
+#include "solution/je_solution.h"
 #include "timing/timing.h"
 #ifdef ENABLE_MINIO
 #include "sync/minio_synchronizer.h"
@@ -58,6 +59,11 @@ int main(int argc, char* argv[]) {
     std::string sync_bucket = "tdgl-results";
     std::string sync_prefix = "";
 #endif
+    // Per-Je mode arguments
+    std::string run_dir;
+    double je_value = std::numeric_limits<double>::quiet_NaN();
+    std::string initial_state_path;
+    std::string mesh_file_path;
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -78,6 +84,15 @@ int main(int argc, char* argv[]) {
             timing_path = argv[++i];
         else if (arg == "--solver-options" && i + 1 < argc)
             solver_options_json = argv[++i];
+        // Per-Je mode arguments
+        else if (arg == "--run-dir" && i + 1 < argc)
+            run_dir = argv[++i];
+        else if (arg == "--je" && i + 1 < argc)
+            je_value = std::stod(argv[++i]);
+        else if (arg == "--initial-state" && i + 1 < argc)
+            initial_state_path = argv[++i];
+        else if (arg == "--mesh-file" && i + 1 < argc)
+            mesh_file_path = argv[++i];
 #ifdef ENABLE_MINIO
         else if (arg == "--enable-sync")
             enable_sync = true;
@@ -96,13 +111,18 @@ int main(int argc, char* argv[]) {
                       << " [--solver-options <json>]"
                       << " [--restart <result.h5>]"
                       << " [--output-dir <dir>]"
-                      << " [--log-file <path>]";
+                      << " [--log-file <path>]\n\n"
+                      << "Per-Je mode:\n"
+                      << "  --run-dir <path>       Output directory for the run\n"
+                      << "  --je <value>           Applied current density for this Je step\n"
+                      << "  --initial-state <path> HDF5 file with initial psi state\n"
+                      << "  --mesh-file <path>     Path to shared mesh.h5 file\n";
 #ifdef ENABLE_MINIO
-            std::cout << " [--enable-sync]"
+            std::cout << "\nMinIO:\n"
+                      << "  --enable-sync"
                       << " [--sync-url <url>] [--sync-bucket <bucket>] [--sync-prefix <prefix>]\n";
 #else
-            std::cout << "\n"
-                      << "MinIO support: Disabled (rebuild with -DENABLE_MINIO=ON to enable)\n";
+            std::cout << "\nMinIO support: Disabled (rebuild with -DENABLE_MINIO=ON to enable)\n";
 #endif
             return 0;
         }
@@ -263,6 +283,69 @@ int main(int argc, char* argv[]) {
             solver_ptr = std::make_unique<TdglSolver>(
                 device, options, applied_A, timing,
                 1.0, output_path, restart_path);
+        } else if (!run_dir.empty()) {
+            // Per-Je simulation mode
+            if (std::isnan(je_value)) {
+                throw std::runtime_error("--je value is required for per-Je mode");
+            }
+
+            // Use mesh_file_path if provided, otherwise use mesh_path
+            std::string actual_mesh_path = mesh_file_path.empty() ? mesh_path : mesh_file_path;
+
+            std::cout << "Per-Je mode: run_dir=" << run_dir << ", je=" << je_value << "\n";
+            if (!initial_state_path.empty()) {
+                std::cout << "Loading initial state from: " << initial_state_path << "\n";
+            }
+            if (!mesh_file_path.empty()) {
+                std::cout << "Using mesh file: " << mesh_file_path << "\n";
+            }
+
+            // Set up terminal currents based on Je value
+            // Je is current density, so we need to scale by terminal area
+            std::map<std::string, double> terminal_currents;
+            for (auto& t : device.terminals) {
+                if (t.name == "source") {
+                    // Je * terminal_area gives terminal current
+                    terminal_currents["source"] = je_value * t.length;
+                    std::cout << "Source terminal: Je=" << je_value << ", area=" << t.length
+                              << ", current=" << terminal_currents["source"] << "\n";
+                }
+                if (t.name == "drain") {
+                    terminal_currents["drain"] = -je_value * t.length;
+                }
+            }
+
+            // Create JeSolutionWriter
+            JeSolutionWriter je_writer(run_dir, device.mesh, device);
+
+            // Use initial_state_path as restart_path for the solver
+            std::string je_restart_path = initial_state_path.empty() ? restart_path : initial_state_path;
+
+            // Create solver (without output_path since we use je_writer)
+            solver_ptr = std::make_unique<TdglSolver>(
+                device, options, applied_A, terminal_currents,
+                1.0, "", je_restart_path);
+
+            // Collect history for JeSolutionWriter
+            std::vector<Eigen::VectorXcd> psi_history;
+            std::vector<Eigen::MatrixX2d> vector_potential_history;
+            std::vector<Eigen::MatrixX2d> superfluid_velocity_history;
+            std::vector<Eigen::MatrixX2d> electric_field_history;
+            std::vector<Eigen::MatrixX2d> current_history;
+
+            // Capture history via callback
+            // Note: For now, this is a placeholder. The solver would need to expose
+            // its internal state to collect the full history needed for JeSolutionWriter.
+            // This would require additional methods in TdglSolver to access:
+            // - psi_history (all time steps)
+            // - vector_potential_history (applied_A + induced_A)
+            // - superfluid_velocity_history
+            // - electric_field_history
+            // - current_history (supercurrent + normal_current)
+
+            std::cout << "Per-Je mode requires solver state collection - not yet fully implemented\n";
+            std::cout << "Solver will run but result file will not be written.\n";
+
         } else {
             std::map<std::string, double> terminal_currents;
             for (auto& t : device.terminals) {

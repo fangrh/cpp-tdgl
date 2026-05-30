@@ -77,6 +77,7 @@ add_library(tdgl_core
     src/solver/solver.cpp
     src/solver/screening.cpp
     src/solution/solution.cpp
+    src/solution/je_solution.cpp
     src/timing/timing.cpp
 )
 target_include_directories(tdgl_core PUBLIC
