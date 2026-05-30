@@ -9,22 +9,16 @@ namespace h5 = HighFive;
 template<typename T>
 std::vector<T> read_1d(const h5::Group& g, const std::string& name) {
     auto ds = g.getDataSet(name);
-    auto dims = ds.getDimensions();
-    size_t n = dims[0];
-    for (size_t i = 1; i < dims.size(); ++i) n *= dims[i];
-    std::vector<T> buf(n);
-    ds.read_raw(buf.data());
+    std::vector<T> buf;
+    ds.read(buf);
     return buf;
 }
 
 template<typename T>
 std::vector<T> read_flat(const h5::Group& g, const std::string& name) {
     auto ds = g.getDataSet(name);
-    auto dims = ds.getDimensions();
-    size_t total = dims[0];
-    for (size_t i = 1; i < dims.size(); ++i) total *= dims[i];
-    std::vector<T> buf(total);
-    ds.read_raw(buf.data());
+    std::vector<T> buf;
+    ds.read(buf);
     return buf;
 }
 
@@ -32,14 +26,14 @@ template<typename T>
 void write_flat(h5::Group& g, const std::string& name,
                 const T* data, size_t rows, size_t cols) {
     h5::DataSpace space({rows, cols});
-    g.createDataSet(name, space, h5::AtomicType<T>()).write_raw(data);
+    g.createDataSet(name, space, h5::AtomicType<T>()).write(data);
 }
 
 template<typename T>
 void write_1d(h5::Group& g, const std::string& name,
               const T* data, size_t n) {
     h5::DataSpace space({n});
-    g.createDataSet(name, space, h5::AtomicType<T>()).write_raw(data);
+    g.createDataSet(name, space, h5::AtomicType<T>()).write(data);
 }
 
 EdgeMesh read_edge_mesh(const h5::Group& eg) {

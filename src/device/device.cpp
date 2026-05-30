@@ -12,11 +12,8 @@ namespace h5 = HighFive;
 template<typename T>
 std::vector<T> read_1d(const h5::Group& g, const std::string& name) {
     auto ds = g.getDataSet(name);
-    auto dims = ds.getDimensions();
-    size_t n = dims[0];
-    for (size_t i = 1; i < dims.size(); ++i) n *= dims[i];
-    std::vector<T> buf(n);
-    ds.read_raw(buf.data());
+    std::vector<T> buf;
+    ds.read(buf);
     return buf;
 }
 

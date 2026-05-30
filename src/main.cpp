@@ -3,7 +3,9 @@
 #include "solver/solver.h"
 #include "solution/solution.h"
 #include "timing/timing.h"
+#ifdef ENABLE_MINIO
 #include "sync/minio_synchronizer.h"
+#endif
 #include <nlohmann/json.hpp>
 #include <highfive/H5File.hpp>
 #include <iostream>
@@ -50,10 +52,12 @@ int main(int argc, char* argv[]) {
     std::string restart_path;
     std::string timing_path;
     std::string solver_options_json;
+#ifdef ENABLE_MINIO
     bool enable_sync = false;
     std::string sync_url = "http://minio:9000";
     std::string sync_bucket = "tdgl-results";
     std::string sync_prefix = "";
+#endif
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -74,6 +78,7 @@ int main(int argc, char* argv[]) {
             timing_path = argv[++i];
         else if (arg == "--solver-options" && i + 1 < argc)
             solver_options_json = argv[++i];
+#ifdef ENABLE_MINIO
         else if (arg == "--enable-sync")
             enable_sync = true;
         else if (arg == "--sync-url" && i + 1 < argc)
@@ -82,6 +87,7 @@ int main(int argc, char* argv[]) {
             sync_bucket = argv[++i];
         else if (arg == "--sync-prefix" && i + 1 < argc)
             sync_prefix = argv[++i];
+#endif
         else if (arg == "--help" || arg == "-h") {
             std::cout << "Usage: tdgl_solve --mesh <input.h5> --output <output.h5>"
                       << " [--source-current <A>] [--drain-current <A>]"
@@ -90,9 +96,14 @@ int main(int argc, char* argv[]) {
                       << " [--solver-options <json>]"
                       << " [--restart <result.h5>]"
                       << " [--output-dir <dir>]"
-                      << " [--log-file <path>]"
-                      << " [--enable-sync]"
+                      << " [--log-file <path>]";
+#ifdef ENABLE_MINIO
+            std::cout << " [--enable-sync]"
                       << " [--sync-url <url>] [--sync-bucket <bucket>] [--sync-prefix <prefix>]\n";
+#else
+            std::cout << "\n"
+                      << "MinIO support: Disabled (rebuild with -DENABLE_MINIO=ON to enable)\n";
+#endif
             return 0;
         }
     }
@@ -131,11 +142,10 @@ int main(int argc, char* argv[]) {
             HighFive::File mesh_file(mesh_path, HighFive::File::ReadOnly);
             if (mesh_file.exist("epsilon")) {
                 auto ds = mesh_file.getDataSet("epsilon");
-                auto dims = ds.getDimensions();
-                size_t n = dims[0];
-                epsilon_values.resize(n);
-                ds.read_raw(epsilon_values.data());
-                std::cout << "Epsilon: " << n << " values loaded\n";
+                std::vector<double> eps;
+                ds.read(eps);
+                epsilon_values = Eigen::Map<Eigen::VectorXd>(eps.data(), eps.size());
+                std::cout << "Epsilon: " << epsilon_values.size() << " values loaded\n";
             }
         }
 
@@ -185,12 +195,18 @@ int main(int argc, char* argv[]) {
 
         std::unique_ptr<TdglSolver> solver_ptr;
         std::unique_ptr<SplitSolutionWriter> split_writer;
+#ifdef ENABLE_MINIO
         std::unique_ptr<MinioSynchronizer> syncer;
+#endif
 
+#ifdef ENABLE_MINIO
         if (enable_sync && !output_dir.empty()) {
             syncer = std::make_unique<MinioSynchronizer>(sync_url, sync_bucket, sync_prefix);
             syncer->start();
+        } else if (enable_sync) {
+            std::cerr << "Warning: --enable-sync specified but --output-dir not set. Sync disabled.\n";
         }
+#endif
 
         if (!output_dir.empty() && !timing_path.empty()) {
             // Use SplitSolutionWriter for per-step HDF5 output
@@ -207,14 +223,20 @@ int main(int argc, char* argv[]) {
 
             // Capture timing, split_writer, and syncer in callbacks
             auto timing_copy = timing;
+#ifdef ENABLE_MINIO
             solver_ptr->on_step_complete = [&, split_writer_ptr = split_writer.get(), syncer_ptr = syncer.get()](int step_idx) {
+#else
+            solver_ptr->on_step_complete = [&, split_writer_ptr = split_writer.get()](int step_idx) {
+#endif
                 split_writer_ptr->end_step();
+#ifdef ENABLE_MINIO
                 if (syncer_ptr) {
                     char buf[256];
                     snprintf(buf, sizeof(buf), "%s/step_%04d.h5", output_dir.c_str(), step_idx);
                     syncer_ptr->upload_step(buf, step_idx);
                     syncer_ptr->upload_index(output_dir + "/discrete_index.json");
                 }
+#endif
                 int next_step = step_idx + 1;
                 if (next_step < (int)timing_copy.steps.size()) {
                     double next_ramp_start = timing_copy.steps[next_step].ramp_start;
@@ -261,11 +283,13 @@ int main(int argc, char* argv[]) {
             split_writer->write_manifest("run_" + std::to_string(time(nullptr)), options.solve_time);
         }
 
+#ifdef ENABLE_MINIO
         if (syncer) {
             syncer->upload_mesh(output_dir + "/mesh.h5");
             syncer->upload_manifest(output_dir + "/manifest.json");
             syncer->stop();
         }
+#endif
 
         std::cout << "Done.\n";
         if (old_cout_buf) std::cout.rdbuf(old_cout_buf);

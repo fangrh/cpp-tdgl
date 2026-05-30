@@ -7,11 +7,18 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 option(BUILD_TESTING "Build tests" ON)
 option(BUILD_BENCHMARKS "Build benchmarks" OFF)
+option(ENABLE_MINIO "Enable MinIO synchronization support" OFF)
 
 find_package(Eigen3 3.4 REQUIRED NO_MODULE)
 find_package(HDF5 REQUIRED COMPONENTS C CXX)
 find_package(OpenMP)
-find_package(CURL REQUIRED)
+
+if(ENABLE_MINIO)
+    find_package(CURL REQUIRED)
+    message(STATUS "MinIO synchronization: ENABLED")
+else()
+    message(STATUS "MinIO synchronization: DISABLED")
+endif()
 
 # SuiteSparse: find UMFPACK
 find_path(SUITESPARSE_INCLUDE_DIRS
@@ -38,7 +45,7 @@ include(FetchContent)
 FetchContent_Declare(
     highfive
     GIT_REPOSITORY https://github.com/BlueBrain/HighFive.git
-    GIT_TAG v2.10.0
+    GIT_TAG v2.7.0
 )
 set(HIGHFIVE_USE_BOOST OFF CACHE BOOL "" FORCE)
 set(HIGHFIVE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
@@ -91,9 +98,15 @@ if(OpenMP_CXX_FOUND)
 endif()
 
 # Main executable
-add_executable(tdgl_solve src/main.cpp src/sync/minio_synchronizer.cpp)
-target_link_libraries(tdgl_solve PRIVATE tdgl_core ${CURL_LIBRARIES})
-target_include_directories(tdgl_solve PRIVATE ${CURL_INCLUDE_DIRS})
+add_executable(tdgl_solve src/main.cpp)
+target_link_libraries(tdgl_solve PRIVATE tdgl_core)
+
+if(ENABLE_MINIO)
+    target_sources(tdgl_solve PRIVATE src/sync/minio_synchronizer.cpp)
+    target_link_libraries(tdgl_solve PRIVATE ${CURL_LIBRARIES})
+    target_include_directories(tdgl_solve PRIVATE ${CURL_INCLUDE_DIRS})
+    target_compile_definitions(tdgl_solve PRIVATE ENABLE_MINIO=1)
+endif()
 
 # Tests
 if(BUILD_TESTING)
